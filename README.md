@@ -148,7 +148,7 @@ a non-activating panel, so the app you were typing in stays active and receives 
 
 ## Not yet
 
-- Sending clips to other Macs (Ditto's "friends")
+- Sending clips to other Macs
 - Editing clips and saved text snippets
 - Global shortcuts that paste clip N without opening the popup
 
