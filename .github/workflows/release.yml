@@ -88,7 +88,7 @@ jobs:
         run: |
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/vodorod-11/homebrew-tap.git" "$RUNNER_TEMP/tap"
           mkdir -p "$RUNNER_TEMP/tap/Casks"
-          sed -e "s/__VERSION__/$VERSION/" -e "s/__SHA256__/$DMG_SHA256/" packaging/homebrew/kopi.rb \
+          sed -e '/^#/d' -e "s/__VERSION__/$VERSION/" -e "s/__SHA256__/$DMG_SHA256/" packaging/homebrew/kopi.rb \
             > "$RUNNER_TEMP/tap/Casks/kopi.rb"
           cd "$RUNNER_TEMP/tap"
           git config user.name "github-actions[bot]"

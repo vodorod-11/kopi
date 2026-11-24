@@ -1,5 +1,5 @@
-# Template of the Homebrew cask. The release workflow fills in the version and the DMG's sha256
-# and pushes the result to https://github.com/vodorod-11/homebrew-tap as Casks/kopi.rb.
+# Template of the Homebrew cask. The release workflow drops these comment lines, fills in the
+# version and the DMG's sha256, and pushes it to https://github.com/vodorod-11/homebrew-tap.
 cask "kopi" do
   version "__VERSION__"
   sha256 "__SHA256__"
