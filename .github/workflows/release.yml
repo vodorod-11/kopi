@@ -1,0 +1,98 @@
+# Publishes a release when a version tag is pushed:  git tag v1.2.0 && git push origin v1.2.0
+#
+# Builds the universal Kopi.app, Kopi-<version>.dmg and Kopi-<version>.zip, creates the GitHub
+# release and updates the Homebrew cask. Optional repository secrets:
+#   HOMEBREW_TAP_TOKEN          token that can push to vodorod-11/homebrew-tap (cask update)
+#   MACOS_CERTIFICATE_P12       base64 of a .p12 with the code-signing certificate and key
+#   MACOS_CERTIFICATE_PASSWORD  password of that .p12
+#   MACOS_SIGN_IDENTITY         certificate name, e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD   notarization (needs a Developer ID certificate)
+# Without the signing secrets the app is signed ad-hoc.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the build number is the commit count
+
+      - name: Version from the tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Unit tests
+        run: swift test
+
+      - name: Import the signing certificate
+        if: env.MACOS_CERTIFICATE_P12 != ''
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/kopi-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/signing.p12"
+          echo "KOPI_SIGN_IDENTITY=$MACOS_SIGN_IDENTITY" >> "$GITHUB_ENV"
+          if [ -n "$APPLE_ID" ]; then echo "KOPI_TIMESTAMP=1" >> "$GITHUB_ENV"; fi
+
+      - name: Build Kopi.app
+        run: scripts/build-app.sh "$VERSION"
+
+      - name: Build the DMG
+        run: scripts/make-dmg.sh "$VERSION"
+
+      - name: Notarize
+        if: env.APPLE_ID != '' && env.MACOS_CERTIFICATE_P12 != ''
+        run: |
+          xcrun notarytool submit "build/Kopi-$VERSION.dmg" \
+            --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
+          xcrun stapler staple "build/Kopi-$VERSION.dmg"
+
+      - name: Checksums
+        run: |
+          cd build
+          mv Kopi.zip "Kopi-$VERSION.zip"
+          shasum -a 256 "Kopi-$VERSION.dmg" "Kopi-$VERSION.zip" | tee SHA256SUMS.txt
+          echo "DMG_SHA256=$(shasum -a 256 "Kopi-$VERSION.dmg" | cut -d ' ' -f 1)" >> "$GITHUB_ENV"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "build/Kopi-$VERSION.dmg" "build/Kopi-$VERSION.zip" build/SHA256SUMS.txt \
+            --title "Kopi $VERSION" --generate-notes
+
+      - name: Update the Homebrew cask
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        run: |
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/vodorod-11/homebrew-tap.git" "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Casks"
+          sed -e "s/__VERSION__/$VERSION/" -e "s/__SHA256__/$DMG_SHA256/" packaging/homebrew/kopi.rb \
+            > "$RUNNER_TEMP/tap/Casks/kopi.rb"
+          cd "$RUNNER_TEMP/tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/kopi.rb
+          git commit -m "kopi $VERSION"
+          git push
